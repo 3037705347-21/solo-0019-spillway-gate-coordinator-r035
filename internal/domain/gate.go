@@ -23,6 +23,7 @@ type Gate struct {
 	Status          GateStatus
 	Aperture        float64
 	MaxAperture     float64
+	LimitRevision   int64
 	ActiveCommandID string
 	UpdatedAt       time.Time
 	Version         int64
@@ -46,13 +47,14 @@ func NewGate(id, name string, maxAperture, initialAperture float64, now time.Tim
 	}
 
 	return Gate{
-		ID:          id,
-		Name:        name,
-		Status:      GateIdle,
-		Aperture:    initialAperture,
-		MaxAperture: maxAperture,
-		UpdatedAt:   now.UTC(),
-		Version:     1,
+		ID:            id,
+		Name:          name,
+		Status:        GateIdle,
+		Aperture:      initialAperture,
+		MaxAperture:   maxAperture,
+		LimitRevision: InitialLimitRevision,
+		UpdatedAt:     now.UTC(),
+		Version:       1,
 	}, nil
 }
 
@@ -106,4 +108,36 @@ func (g *Gate) Settle(finalAperture float64, faulted bool, now time.Time) error 
 	g.UpdatedAt = now.UTC()
 	g.Version++
 	return nil
+}
+
+// ReviseLimit changes the maximum allowed aperture after a structural re-review.
+// It is only legal while the gate is idle with no active command, and the new
+// limit must still cover the gate's current physical aperture. The gate's
+// limit revision counter advances on every successful revision.
+func (g *Gate) ReviseLimit(newMaxAperture float64, now time.Time) (previousMaxAperture float64, sequence int64, err error) {
+	if g.Status != GateIdle || g.ActiveCommandID != "" {
+		return 0, 0, Conflict(
+			"gate_not_idle",
+			"gate must be idle with no active command before its aperture limit can be revised",
+		)
+	}
+	if newMaxAperture <= 0 || newMaxAperture > 1000 {
+		return 0, 0, Invalid("invalid_max_aperture", "max aperture must be greater than zero")
+	}
+	if newMaxAperture == g.MaxAperture {
+		return 0, 0, Invalid("limit_unchanged", "new max aperture must differ from the current limit")
+	}
+	if newMaxAperture < g.Aperture {
+		return 0, 0, Conflict(
+			"aperture_exceeds_new_limit",
+			"current gate aperture exceeds the proposed limit; move the gate within range first",
+		)
+	}
+
+	previous := g.MaxAperture
+	g.MaxAperture = newMaxAperture
+	g.LimitRevision++
+	g.UpdatedAt = now.UTC()
+	g.Version++
+	return previous, g.LimitRevision, nil
 }

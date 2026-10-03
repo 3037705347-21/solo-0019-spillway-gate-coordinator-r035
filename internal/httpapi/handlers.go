@@ -34,6 +34,38 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, contracts.GateResponse{Gate: gateView(gate)})
 }
 
+func (h *handler) reviseGateLimit(w http.ResponseWriter, r *http.Request) {
+	var request contracts.ReviseGateLimitRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+
+	gate, revision, err := h.service.ReviseGateLimit(r.Context(), r.PathValue("id"), request)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, contracts.ReviseGateLimitResponse{
+		Gate:     gateView(gate),
+		Revision: limitRevisionView(revision),
+	})
+}
+
+func (h *handler) limitRevisions(w http.ResponseWriter, r *http.Request) {
+	revisions, err := h.service.LimitRevisions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+
+	views := make([]contracts.LimitRevisionView, 0, len(revisions))
+	for _, revision := range revisions {
+		views = append(views, limitRevisionView(revision))
+	}
+	writeJSON(w, http.StatusOK, contracts.LimitRevisionsResponse{Revisions: views})
+}
+
 func (h *handler) requestCommand(w http.ResponseWriter, r *http.Request) {
 	var request contracts.RequestCommandRequest
 	if err := decodeJSON(w, r, &request); err != nil {
@@ -41,7 +73,7 @@ func (h *handler) requestCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	command, err := h.service.RequestCommand(r.Context(), request)
+	command, gate, err := h.service.RequestCommand(r.Context(), request)
 	if err != nil {
 		writeDomainError(w, err)
 		return
@@ -49,12 +81,12 @@ func (h *handler) requestCommand(w http.ResponseWriter, r *http.Request) {
 	writeJSON(
 		w,
 		http.StatusCreated,
-		contracts.CommandResponse{Command: commandView(command, false)},
+		contracts.CommandResponse{Command: commandView(command, gate, false), Gate: gateView(gate)},
 	)
 }
 
 func (h *handler) command(w http.ResponseWriter, r *http.Request) {
-	command, err := h.service.Command(r.Context(), r.PathValue("id"))
+	command, gate, err := h.service.CommandDetail(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeDomainError(w, err)
 		return
@@ -62,7 +94,7 @@ func (h *handler) command(w http.ResponseWriter, r *http.Request) {
 	writeJSON(
 		w,
 		http.StatusOK,
-		contracts.CommandResponse{Command: commandView(command, false)},
+		contracts.CommandResponse{Command: commandView(command, gate, false), Gate: gateView(gate)},
 	)
 }
 
@@ -82,7 +114,7 @@ func (h *handler) reviewInterlock(w http.ResponseWriter, r *http.Request) {
 		w,
 		http.StatusOK,
 		contracts.ReviewCommandResponse{
-			Command: commandView(command, true),
+			Command: commandView(command, gate, true),
 			Gate:    gateView(gate),
 		},
 	)
@@ -104,7 +136,7 @@ func (h *handler) executeCommand(w http.ResponseWriter, r *http.Request) {
 		w,
 		http.StatusOK,
 		contracts.ExecuteCommandResponse{
-			Command: commandView(command, false),
+			Command: commandView(command, gate, false),
 			Gate:    gateView(gate),
 		},
 	)

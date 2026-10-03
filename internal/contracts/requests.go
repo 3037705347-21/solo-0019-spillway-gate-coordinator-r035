@@ -15,13 +15,21 @@ type RequestCommandRequest struct {
 }
 
 type ReviewInterlockRequest struct {
-	Verdict  string `json:"verdict"`
-	Verifier string `json:"verifier"`
-	Note     string `json:"note"`
+	Verdict       string `json:"verdict"`
+	Verifier      string `json:"verifier"`
+	Note          string `json:"note"`
+	LimitRevision int64  `json:"limit_revision,omitempty"`
 }
 
 type ExecuteCommandRequest struct {
 	Operator      string `json:"operator"`
 	Token         string `json:"token"`
 	SimulateFault bool   `json:"simulate_fault"`
+}
+
+type ReviseGateLimitRequest struct {
+	NewMaxAperture float64 `json:"new_max_aperture"`
+	Basis          string  `json:"basis"`
+	Reason         string  `json:"reason"`
+	RequestedBy    string  `json:"requested_by"`
 }

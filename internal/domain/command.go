@@ -21,6 +21,8 @@ type GateCommand struct {
 	GateID           string
 	TargetAperture   float64
 	StartingAperture float64
+	LimitMaxAperture float64
+	LimitRevision    int64
 	Reason           string
 	RequestedBy      string
 	Status           CommandStatus
@@ -39,6 +41,7 @@ func NewGateCommand(
 	targetAperture float64,
 	startingAperture float64,
 	maxAperture float64,
+	limitRevision int64,
 	reason string,
 	requestedBy string,
 	now time.Time,
@@ -63,6 +66,9 @@ func NewGateCommand(
 		return GateCommand{}, Invalid("invalid_requested_by", "requested_by is required")
 	}
 
+	if limitRevision < InitialLimitRevision {
+		return GateCommand{}, Invalid("invalid_limit_revision", "limit revision must reference the gate's current limit")
+	}
 	if startingAperture < 0 || startingAperture > maxAperture {
 		return GateCommand{}, Invalid("invalid_starting_aperture", "starting aperture is outside the gate limit")
 	}
@@ -78,6 +84,8 @@ func NewGateCommand(
 		GateID:           gateID,
 		TargetAperture:   targetAperture,
 		StartingAperture: startingAperture,
+		LimitMaxAperture: maxAperture,
+		LimitRevision:    limitRevision,
 		Reason:           reason,
 		RequestedBy:      requestedBy,
 		Status:           CommandPending,
@@ -85,6 +93,33 @@ func NewGateCommand(
 		UpdatedAt:        now.UTC(),
 		Version:          1,
 	}, nil
+}
+
+// ValidateReviewBasis ensures the reviewer's decision is taken against the
+// gate's current aperture limit. A stale decision must be explicitly
+// re-confirmed after every limit revision; a clear verdict additionally
+// requires the command target to remain feasible under the acknowledged
+// limit. A blocked verdict is always allowed: it occupies no gate and
+// enforces nothing.
+func (c *GateCommand) ValidateReviewBasis(
+	verdict InterlockVerdict,
+	acknowledgedRevision int64,
+	currentMaxAperture float64,
+	currentRevision int64,
+) error {
+	if acknowledgedRevision != currentRevision {
+		return Conflict(
+			"stale_limit_revision",
+			"interlock decision must be re-confirmed against the current aperture limit",
+		)
+	}
+	if verdict == InterlockClear && c.TargetAperture > currentMaxAperture {
+		return Conflict(
+			"command_exceeds_current_limit",
+			"command target aperture exceeds the current gate limit",
+		)
+	}
+	return nil
 }
 
 func (c *GateCommand) Review(decision InterlockDecision, token string, now time.Time) error {
