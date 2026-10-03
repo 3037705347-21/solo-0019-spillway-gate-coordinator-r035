@@ -17,20 +17,22 @@ const (
 )
 
 type GateCommand struct {
-	ID               string
-	GateID           string
-	TargetAperture   float64
-	StartingAperture float64
-	Reason           string
-	RequestedBy      string
-	Status           CommandStatus
-	Interlock        *InterlockDecision
-	ExecutionToken   string
-	ExecutedBy       string
-	TerminalReason   string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Version          int64
+	ID                 string
+	GateID             string
+	TargetAperture     float64
+	StartingAperture   float64
+	BasisLimitRevision int64
+	BasisMaxAperture   float64
+	Reason             string
+	RequestedBy        string
+	Status             CommandStatus
+	Interlock          *InterlockDecision
+	ExecutionToken     string
+	ExecutedBy         string
+	TerminalReason     string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Version            int64
 }
 
 func NewGateCommand(
@@ -39,6 +41,7 @@ func NewGateCommand(
 	targetAperture float64,
 	startingAperture float64,
 	maxAperture float64,
+	limitRevision int64,
 	reason string,
 	requestedBy string,
 	now time.Time,
@@ -72,24 +75,82 @@ func NewGateCommand(
 	if targetAperture == startingAperture {
 		return GateCommand{}, Invalid("no_aperture_change", "target aperture must differ from the current aperture")
 	}
+	if limitRevision <= 0 {
+		return GateCommand{}, Invalid("invalid_limit_basis", "limit revision is required")
+	}
 
 	return GateCommand{
-		ID:               commandID,
-		GateID:           gateID,
-		TargetAperture:   targetAperture,
-		StartingAperture: startingAperture,
-		Reason:           reason,
-		RequestedBy:      requestedBy,
-		Status:           CommandPending,
-		CreatedAt:        now.UTC(),
-		UpdatedAt:        now.UTC(),
-		Version:          1,
+		ID:                 commandID,
+		GateID:             gateID,
+		TargetAperture:     targetAperture,
+		StartingAperture:   startingAperture,
+		BasisLimitRevision: limitRevision,
+		BasisMaxAperture:   maxAperture,
+		Reason:             reason,
+		RequestedBy:        requestedBy,
+		Status:             CommandPending,
+		CreatedAt:          now.UTC(),
+		UpdatedAt:          now.UTC(),
+		Version:            1,
 	}, nil
 }
 
-func (c *GateCommand) Review(decision InterlockDecision, token string, now time.Time) error {
+// BasisIsCurrent reports whether the command was requested against the limit
+// revision currently in force. A stale basis must be reconfirmed before a
+// clear review can reserve the gate.
+func (c *GateCommand) BasisIsCurrent(currentRevision int64) bool {
+	return c.BasisLimitRevision == currentRevision
+}
+
+// ReconfirmBasis rebases a still-pending command onto the gate's current
+// limit revision after a manager re-verified the request. The frozen target
+// must remain valid under the new limit, and a command already on the
+// current revision needs no reconfirmation.
+func (c *GateCommand) ReconfirmBasis(currentRevision int64, currentMax float64, confirmedBy string, now time.Time) error {
+	if c.Status != CommandPending {
+		return Conflict("command_not_pending", "only pending commands can reconfirm their limit basis")
+	}
+	confirmedBy = strings.TrimSpace(confirmedBy)
+	if confirmedBy == "" {
+		return Invalid("invalid_confirmed_by", "confirmed_by is required")
+	}
+	if currentRevision <= 0 {
+		return Invalid("invalid_limit_basis", "current limit revision is unknown")
+	}
+	if currentRevision == c.BasisLimitRevision {
+		return Conflict("limit_basis_current", "command already references the current limit revision")
+	}
+	if c.TargetAperture > currentMax || c.TargetAperture < 0 {
+		return Invalid("invalid_target_aperture", "target aperture is outside the revised gate limit")
+	}
+	if c.StartingAperture > currentMax || c.StartingAperture < 0 {
+		return Invalid("invalid_starting_aperture", "starting aperture is outside the revised gate limit")
+	}
+
+	c.BasisLimitRevision = currentRevision
+	c.BasisMaxAperture = currentMax
+	c.UpdatedAt = now.UTC()
+	c.Version++
+	return nil
+}
+
+func (c *GateCommand) Review(
+	decision InterlockDecision,
+	token string,
+	currentLimitRevision int64,
+	now time.Time,
+) error {
 	if c.Status != CommandPending {
 		return Conflict("command_not_pending", "only pending commands can be reviewed")
+	}
+	// A clear verdict is a safety acceptance that reserves the gate; it must
+	// always be checked against the limit currently in force. A blocked
+	// verdict only rejects the command and may proceed on any basis.
+	if decision.IsClear() && !c.BasisIsCurrent(currentLimitRevision) {
+		return Conflict(
+			"command_limit_basis_stale",
+			"the gate limit changed after this command was requested; reconfirm the command before a clear review",
+		)
 	}
 
 	decisionCopy := decision

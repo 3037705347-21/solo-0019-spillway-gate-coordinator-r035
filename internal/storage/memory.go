@@ -43,6 +43,40 @@ func (m *MemoryRepository) Gate(_ context.Context, id string) (domain.Gate, erro
 	return gate, nil
 }
 
+func (m *MemoryRepository) ReviseGateLimit(
+	_ context.Context,
+	gateID string,
+	maxAperture float64,
+	basisReference string,
+	reason string,
+	revisedBy string,
+	now time.Time,
+) (domain.Gate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	gate, exists := m.gates[gateID]
+	if !exists {
+		return domain.Gate{}, domain.NotFound("gate_not_found", "gate id was not found")
+	}
+	if err := gate.ReviseLimit(maxAperture, basisReference, reason, revisedBy, now); err != nil {
+		return domain.Gate{}, err
+	}
+	m.gates[gateID] = gate
+	return gate, nil
+}
+
+func (m *MemoryRepository) GateLimitRevisions(_ context.Context, gateID string) ([]domain.LimitRevision, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	gate, exists := m.gates[gateID]
+	if !exists {
+		return nil, domain.NotFound("gate_not_found", "gate id was not found")
+	}
+	return gate.LimitHistoryCopy(), nil
+}
+
 func (m *MemoryRepository) CreateCommand(_ context.Context, command domain.GateCommand) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -53,6 +87,15 @@ func (m *MemoryRepository) CreateCommand(_ context.Context, command domain.GateC
 	}
 	if gate.Status == domain.GateFaulted {
 		return domain.Conflict("gate_faulted", "faulted gates cannot receive new commands")
+	}
+	if command.BasisLimitRevision != gate.LimitRevision {
+		return domain.Conflict(
+			"gate_limit_changed",
+			"the gate limit changed before the command was stored; resubmit against the current limit",
+		)
+	}
+	if command.BasisMaxAperture != gate.MaxAperture {
+		return domain.Conflict("gate_limit_changed", "the gate limit changed before the command was stored")
 	}
 	if command.StartingAperture != gate.Aperture {
 		return domain.Conflict("gate_aperture_changed", "gate aperture changed before the command was stored")
@@ -68,15 +111,48 @@ func (m *MemoryRepository) CreateCommand(_ context.Context, command domain.GateC
 	return nil
 }
 
-func (m *MemoryRepository) Command(_ context.Context, id string) (domain.GateCommand, error) {
+func (m *MemoryRepository) CommandDetail(_ context.Context, id string) (domain.GateCommand, domain.Gate, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	command, exists := m.commands[id]
 	if !exists {
-		return domain.GateCommand{}, domain.NotFound("command_not_found", "command id was not found")
+		return domain.GateCommand{}, domain.Gate{}, domain.NotFound("command_not_found", "command id was not found")
 	}
-	return cloneCommand(command), nil
+	gate, exists := m.gates[command.GateID]
+	if !exists {
+		return domain.GateCommand{}, domain.Gate{}, domain.NotFound("gate_not_found", "gate id was not found")
+	}
+	return cloneCommand(command), gate, nil
+}
+
+func (m *MemoryRepository) ReconfirmCommand(
+	_ context.Context,
+	commandID string,
+	confirmedBy string,
+	now time.Time,
+) (domain.GateCommand, domain.Gate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	command, exists := m.commands[commandID]
+	if !exists {
+		return domain.GateCommand{}, domain.Gate{}, domain.NotFound("command_not_found", "command id was not found")
+	}
+	gate, exists := m.gates[command.GateID]
+	if !exists {
+		return domain.GateCommand{}, domain.Gate{}, domain.NotFound("gate_not_found", "gate id was not found")
+	}
+	if gate.Status == domain.GateFaulted {
+		return domain.GateCommand{}, domain.Gate{}, domain.Conflict("gate_faulted", "faulted gates cannot reconfirm commands")
+	}
+
+	nextCommand := cloneCommand(command)
+	if err := nextCommand.ReconfirmBasis(gate.LimitRevision, gate.MaxAperture, confirmedBy, now); err != nil {
+		return domain.GateCommand{}, domain.Gate{}, err
+	}
+	m.commands[nextCommand.ID] = nextCommand
+	return cloneCommand(nextCommand), gate, nil
 }
 
 func (m *MemoryRepository) ReviewCommand(
@@ -99,7 +175,7 @@ func (m *MemoryRepository) ReviewCommand(
 	}
 
 	nextCommand := cloneCommand(command)
-	if err := nextCommand.Review(decision, token, now); err != nil {
+	if err := nextCommand.Review(decision, token, gate.LimitRevision, now); err != nil {
 		return domain.GateCommand{}, domain.Gate{}, err
 	}
 

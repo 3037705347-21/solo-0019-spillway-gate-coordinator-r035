@@ -18,26 +18,46 @@ func gateView(gate domain.Gate) contracts.GateView {
 		Status:          string(gate.Status),
 		Aperture:        gate.Aperture,
 		MaxAperture:     gate.MaxAperture,
+		LimitRevision:   gate.LimitRevision,
 		ActiveCommandID: gate.ActiveCommandID,
 		UpdatedAt:       formatTime(gate.UpdatedAt),
 		Version:         gate.Version,
 	}
 }
 
-func commandView(command domain.GateCommand, includeToken bool) contracts.CommandView {
+func limitRevisionViews(revisions []domain.LimitRevision) []contracts.LimitRevisionView {
+	views := make([]contracts.LimitRevisionView, 0, len(revisions))
+	for _, revision := range revisions {
+		views = append(views, contracts.LimitRevisionView{
+			Revision:       revision.Revision,
+			MaxAperture:    revision.MaxAperture,
+			Source:         string(revision.Source),
+			BasisReference: revision.BasisReference,
+			Reason:         revision.Reason,
+			RevisedBy:      revision.RevisedBy,
+			RevisedAt:      formatTime(revision.RevisedAt),
+		})
+	}
+	return views
+}
+
+func commandView(command domain.GateCommand, includeToken bool, basisCurrent bool) contracts.CommandView {
 	view := contracts.CommandView{
-		ID:               command.ID,
-		GateID:           command.GateID,
-		TargetAperture:   command.TargetAperture,
-		StartingAperture: command.StartingAperture,
-		Reason:           command.Reason,
-		RequestedBy:      command.RequestedBy,
-		Status:           string(command.Status),
-		ExecutedBy:       command.ExecutedBy,
-		TerminalReason:   command.TerminalReason,
-		CreatedAt:        formatTime(command.CreatedAt),
-		UpdatedAt:        formatTime(command.UpdatedAt),
-		Version:          command.Version,
+		ID:                 command.ID,
+		GateID:             command.GateID,
+		TargetAperture:     command.TargetAperture,
+		StartingAperture:   command.StartingAperture,
+		BasisLimitRevision: command.BasisLimitRevision,
+		BasisMaxAperture:   command.BasisMaxAperture,
+		BasisCurrent:       basisCurrent,
+		Reason:             command.Reason,
+		RequestedBy:        command.RequestedBy,
+		Status:             string(command.Status),
+		ExecutedBy:         command.ExecutedBy,
+		TerminalReason:     command.TerminalReason,
+		CreatedAt:          formatTime(command.CreatedAt),
+		UpdatedAt:          formatTime(command.UpdatedAt),
+		Version:            command.Version,
 	}
 
 	if includeToken && command.Status == domain.CommandApproved {

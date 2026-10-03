@@ -27,3 +27,27 @@ func (s *Service) RegisterGate(ctx context.Context, request contracts.RegisterGa
 func (s *Service) Gate(ctx context.Context, id string) (domain.Gate, error) {
 	return s.repository.Gate(ctx, id)
 }
+
+func (s *Service) ReviseGateLimit(
+	ctx context.Context,
+	gateID string,
+	request contracts.ReviseLimitRequest,
+) (domain.Gate, error) {
+	return s.repository.ReviseGateLimit(
+		ctx,
+		gateID,
+		request.MaxAperture,
+		request.BasisReference,
+		request.Reason,
+		request.RevisedBy,
+		s.now(),
+	)
+}
+
+func (s *Service) GateLimitRevisions(ctx context.Context, gateID string) (string, []domain.LimitRevision, error) {
+	revisions, err := s.repository.GateLimitRevisions(ctx, gateID)
+	if err != nil {
+		return "", nil, err
+	}
+	return gateID, revisions, nil
+}

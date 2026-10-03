@@ -124,6 +124,48 @@
         "storage",
         "contracts"
       ]
+    },
+    {
+      "id": "revise-gate-limit",
+      "name": "Revise gate aperture limit",
+      "entry": "POST /gates/{id}/limit-revisions",
+      "steps": [
+        "validate the structural review basis, reason and manager identity",
+        "require an idle unreserved gate and a new limit at or above the physical aperture",
+        "append an immutable limit revision and expose the history"
+      ],
+      "success": "returns the gate on a new limit revision and records the cited structural review",
+      "failure": "returns invalid input for missing evidence or a limit below the aperture, and conflict on an occupied or faulted gate",
+      "verification": "workflowcheck revises limits with and without active occupancy, reads history, and races revision against clear review",
+      "module_ids": [
+        "entrypoint",
+        "httpapi",
+        "coordination",
+        "domain",
+        "storage",
+        "contracts"
+      ]
+    },
+    {
+      "id": "reconfirm-command-basis",
+      "name": "Reconfirm pending command limit basis",
+      "entry": "POST /commands/{id}/reconfirm",
+      "steps": [
+        "load the pending command and current gate limit under one lock",
+        "revalidate the frozen target against the revised limit",
+        "rebind the command to the current limit revision"
+      ],
+      "success": "returns the pending command on the current basis",
+      "failure": "returns invalid input when the frozen target exceeds the new limit and conflict for non-pending or current-basis commands",
+      "verification": "workflowcheck proves a stale clear review is refused, an over-limit reconfirm fails, and a reconfirmed command can be cleared",
+      "module_ids": [
+        "entrypoint",
+        "httpapi",
+        "coordination",
+        "domain",
+        "storage",
+        "contracts"
+      ]
     }
   ],
   "complexity": {

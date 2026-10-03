@@ -34,16 +34,29 @@
 
 闸门操作员通过 `POST /commands/{id}/execute` 提交执行令牌。服务校验命令、令牌、闸门占用关系和目标开度，在临界区内完成 approved、executing、completed 或 aborted 的转换，并同步更新闸门状态。令牌在命令结束后失效，不能复用。
 
+### revise-gate-limit
+
+闸门完成结构复审后，管理人员通过 `POST /gates/{id}/limit-revisions` 提交新的最大开度。请求必须携带结构复审依据编号、修订原因和修订人；只有空闲且无活动占用的闸门可以修订，且新限幅不得低于闸门当前物理开度。每次成功修订生成一条不可变的限幅记录，登记时的限幅恒为第 1 版。可通过 `GET /gates/{id}/limit-revisions` 读取完整修订历史。
+
+### reconfirm-command-basis
+
+限幅修订后，所有仍待复核的命令持有的是旧限幅依据。安全复核员提交 clear 结论前，命令必须由有权限的人员通过 `POST /commands/{id}/reconfirm` 重新确认到当前限幅版本；若冻结的目标开度已超出新限幅，重新确认被拒绝，命令只能改走 blocked 结论或被放弃。blocked 结论不占用闸门，在旧依据上仍然有效。
+
 ## 状态与规则
 
 - `gate` 状态：idle、reserved、moving、faulted。
 - `gate_command` 状态：pending、approved、rejected、executing、completed、aborted。
-- 只有 pending 命令可以复核。
+- 闸门限幅带版本号：登记为第 1 版，每次基于结构复审的修订单调递增；限幅历史只追加、不改写。
+- 命令在创建时冻结限幅依据（版本号与当时最大开度）和起始开度。
+- 命令读取结果通过 `basis_current` 说明其依据是否仍是当前限幅；终态命令永久保留自己的依据快照，不因后续修订而改变。
+- 只有 pending 命令可以复核；clear 结论要求依据为当前版本，否则返回 `command_limit_basis_stale` 冲突且不改变任何状态；blocked 结论不受依据版本限制。
+- 只有 pending 命令可以重新确认依据；重新确认按当前限幅重新校验目标开度与起始开度。
 - 只有 approved 命令可以执行，且执行令牌必须匹配。
+- 限幅修订与 clear 复核在同一把仓库互斥锁内串行：占用中的闸门（reserved、moving、faulted）拒绝修订，修订先成则旧依据 clear 被拒，二者只有一个明确结果。
 - clear 复核与闸门占用必须同时成功；任一步失败时两者都不写入。
 - blocked 复核使命令 rejected，不会占用闸门。
 - 模拟故障会令命令 aborted、闸门 faulted，并保留最终开度。
-- 已完成或已中止的命令不能再次执行。
+- 已完成或已中止的命令不能再次执行，其历史事实不能被限幅修订改写。
 
 ## 模块边界
 
@@ -60,8 +73,11 @@
 - `GET /health`
 - `POST /gates`
 - `GET /gates/{id}`
+- `POST /gates/{id}/limit-revisions`
+- `GET /gates/{id}/limit-revisions`
 - `POST /commands`
 - `GET /commands/{id}`
+- `POST /commands/{id}/reconfirm`
 - `POST /commands/{id}/interlock`
 - `POST /commands/{id}/execute`
 

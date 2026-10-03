@@ -127,6 +127,22 @@ func floatField(object map[string]any, name string) (float64, error) {
 	return number, nil
 }
 
+func boolField(object map[string]any, name string) (bool, error) {
+	value, exists := object[name]
+	if !exists {
+		return false, fmt.Errorf("object is missing boolean field %q", name)
+	}
+	flag, ok := value.(bool)
+	if !ok {
+		return false, fmt.Errorf("object field %q is not a boolean", name)
+	}
+	return flag, nil
+}
+
+func errorCode(result apiResult) (string, error) {
+	return stringField(result.Body, "code")
+}
+
 func prettyBody(body map[string]any) string {
 	encoded, err := json.Marshal(body)
 	if err != nil {

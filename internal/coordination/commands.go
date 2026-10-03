@@ -27,6 +27,7 @@ func (s *Service) RequestCommand(
 		request.TargetAperture,
 		gate.Aperture,
 		gate.MaxAperture,
+		gate.LimitRevision,
 		request.Reason,
 		request.RequestedBy,
 		s.now(),
@@ -40,8 +41,16 @@ func (s *Service) RequestCommand(
 	return command, nil
 }
 
-func (s *Service) Command(ctx context.Context, id string) (domain.GateCommand, error) {
-	return s.repository.Command(ctx, id)
+func (s *Service) Command(ctx context.Context, id string) (domain.GateCommand, domain.Gate, error) {
+	return s.repository.CommandDetail(ctx, id)
+}
+
+func (s *Service) ReconfirmCommand(
+	ctx context.Context,
+	commandID string,
+	request contracts.ReconfirmCommandRequest,
+) (domain.GateCommand, domain.Gate, error) {
+	return s.repository.ReconfirmCommand(ctx, commandID, request.ConfirmedBy, s.now())
 }
 
 func (s *Service) ReviewInterlock(

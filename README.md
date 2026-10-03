@@ -16,8 +16,11 @@ go run ./cmd/server --addr 127.0.0.1:18119
 ```text
 POST /gates
 GET  /gates/{id}
+POST /gates/{id}/limit-revisions
+GET  /gates/{id}/limit-revisions
 POST /commands
 GET  /commands/{id}
+POST /commands/{id}/reconfirm
 POST /commands/{id}/interlock
 POST /commands/{id}/execute
 ```
@@ -30,6 +33,26 @@ POST /commands/{id}/execute
   "name": "东侧泄洪闸",
   "max_aperture": 4.5,
   "initial_aperture": 0.5
+}
+```
+
+结构复审后修订最大开度（仅空闲、无活动占用的闸门允许；新限幅不得低于当前开度）：
+
+```json
+{
+  "max_aperture": 3.2,
+  "basis_reference": "structural-review-2026-01",
+  "reason": "结构复审后下调允许开度",
+  "revised_by": "manager-luo"
+}
+```
+
+限幅修订后，旧依据的待复核命令在 clear 复核时会得到 `command_limit_basis_stale`
+冲突；需要先按当前限幅重新确认（目标超出新限幅时此请求会被拒绝）：
+
+```json
+{
+  "confirmed_by": "dispatcher-lin"
 }
 ```
 
@@ -82,9 +105,12 @@ go run ./cmd/workflowcheck --workflow register-gate
 go run ./cmd/workflowcheck --workflow request-gate-command
 go run ./cmd/workflowcheck --workflow review-safety-interlock
 go run ./cmd/workflowcheck --workflow execute-gate-command
+go run ./cmd/workflowcheck --workflow revise-gate-limit
 ```
 
 这些检查会创建临时 HTTP 服务并调用真实路由。它们不调用外部网络，也不依赖数据库。
+`revise-gate-limit` 额外以并发请求验证限幅修订与 clear 复核在竞争下恰好只有一个
+成功结果。
 
 ## 测试状态
 

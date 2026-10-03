@@ -34,6 +34,34 @@ func (h *handler) gate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, contracts.GateResponse{Gate: gateView(gate)})
 }
 
+func (h *handler) reviseGateLimit(w http.ResponseWriter, r *http.Request) {
+	var request contracts.ReviseLimitRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+
+	gate, err := h.service.ReviseGateLimit(r.Context(), r.PathValue("id"), request)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, contracts.ReviseLimitResponse{Gate: gateView(gate)})
+}
+
+func (h *handler) gateLimitRevisions(w http.ResponseWriter, r *http.Request) {
+	gateID, revisions, err := h.service.GateLimitRevisions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(
+		w,
+		http.StatusOK,
+		contracts.LimitRevisionsResponse{GateID: gateID, Revisions: limitRevisionViews(revisions)},
+	)
+}
+
 func (h *handler) requestCommand(w http.ResponseWriter, r *http.Request) {
 	var request contracts.RequestCommandRequest
 	if err := decodeJSON(w, r, &request); err != nil {
@@ -46,15 +74,17 @@ func (h *handler) requestCommand(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	// A freshly stored command is always on the revision it was validated
+	// against, so its basis is current at creation time.
 	writeJSON(
 		w,
 		http.StatusCreated,
-		contracts.CommandResponse{Command: commandView(command, false)},
+		contracts.CommandResponse{Command: commandView(command, false, true)},
 	)
 }
 
 func (h *handler) command(w http.ResponseWriter, r *http.Request) {
-	command, err := h.service.Command(r.Context(), r.PathValue("id"))
+	command, gate, err := h.service.Command(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeDomainError(w, err)
 		return
@@ -62,7 +92,31 @@ func (h *handler) command(w http.ResponseWriter, r *http.Request) {
 	writeJSON(
 		w,
 		http.StatusOK,
-		contracts.CommandResponse{Command: commandView(command, false)},
+		contracts.CommandResponse{
+			Command: commandView(command, false, command.BasisIsCurrent(gate.LimitRevision)),
+		},
+	)
+}
+
+func (h *handler) reconfirmCommand(w http.ResponseWriter, r *http.Request) {
+	var request contracts.ReconfirmCommandRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+
+	command, gate, err := h.service.ReconfirmCommand(r.Context(), r.PathValue("id"), request)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(
+		w,
+		http.StatusOK,
+		contracts.ReconfirmCommandResponse{
+			Command: commandView(command, false, command.BasisIsCurrent(gate.LimitRevision)),
+			Gate:    gateView(gate),
+		},
 	)
 }
 
@@ -82,7 +136,7 @@ func (h *handler) reviewInterlock(w http.ResponseWriter, r *http.Request) {
 		w,
 		http.StatusOK,
 		contracts.ReviewCommandResponse{
-			Command: commandView(command, true),
+			Command: commandView(command, true, command.BasisIsCurrent(gate.LimitRevision)),
 			Gate:    gateView(gate),
 		},
 	)
@@ -104,7 +158,7 @@ func (h *handler) executeCommand(w http.ResponseWriter, r *http.Request) {
 		w,
 		http.StatusOK,
 		contracts.ExecuteCommandResponse{
-			Command: commandView(command, false),
+			Command: commandView(command, false, command.BasisIsCurrent(gate.LimitRevision)),
 			Gate:    gateView(gate),
 		},
 	)

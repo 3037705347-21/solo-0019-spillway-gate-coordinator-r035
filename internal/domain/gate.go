@@ -23,6 +23,8 @@ type Gate struct {
 	Status          GateStatus
 	Aperture        float64
 	MaxAperture     float64
+	LimitRevision   int64
+	LimitHistory    []LimitRevision
 	ActiveCommandID string
 	UpdatedAt       time.Time
 	Version         int64
@@ -45,15 +47,65 @@ func NewGate(id, name string, maxAperture, initialAperture float64, now time.Tim
 		return Gate{}, Invalid("invalid_initial_aperture", "initial aperture must be within the gate limit")
 	}
 
+	initialLimit := newRegistrationLimit(maxAperture, now)
 	return Gate{
-		ID:          id,
-		Name:        name,
-		Status:      GateIdle,
-		Aperture:    initialAperture,
-		MaxAperture: maxAperture,
-		UpdatedAt:   now.UTC(),
-		Version:     1,
+		ID:            id,
+		Name:          name,
+		Status:        GateIdle,
+		Aperture:      initialAperture,
+		MaxAperture:   maxAperture,
+		LimitRevision: initialLimit.Revision,
+		LimitHistory:  []LimitRevision{initialLimit},
+		UpdatedAt:     now.UTC(),
+		Version:       1,
 	}, nil
+}
+
+// ReviseLimit replaces the maximum aperture based on a cited structural
+// review. It is only safe on an idle gate without an active command, and the
+// new limit must stay at or above the physical aperture the gate is at.
+func (g *Gate) ReviseLimit(
+	maxAperture float64,
+	basisReference, reason, revisedBy string,
+	now time.Time,
+) error {
+	basisReference, reason, revisedBy, err := validateRevisionEvidence(basisReference, reason, revisedBy)
+	if err != nil {
+		return err
+	}
+	if maxAperture <= 0 || maxAperture > 1000 {
+		return Invalid("invalid_max_aperture", "max aperture must be greater than zero")
+	}
+	if g.Status != GateIdle || g.ActiveCommandID != "" {
+		return Conflict("gate_not_idle", "limit can only be revised while the gate is idle and unreserved")
+	}
+	if maxAperture < g.Aperture {
+		return Invalid("limit_below_current_aperture", "revised limit must not be below the current aperture")
+	}
+	if maxAperture == g.MaxAperture {
+		return Conflict("limit_unchanged", "revised limit is identical to the current limit")
+	}
+
+	entry := LimitRevision{
+		Revision:       g.LimitRevision + 1,
+		MaxAperture:    maxAperture,
+		Source:         LimitFromStructuralReview,
+		BasisReference: basisReference,
+		Reason:         reason,
+		RevisedBy:      revisedBy,
+		RevisedAt:      now.UTC(),
+	}
+	g.MaxAperture = maxAperture
+	g.LimitRevision = entry.Revision
+	g.LimitHistory = append(append([]LimitRevision(nil), g.LimitHistory...), entry)
+	g.UpdatedAt = now.UTC()
+	g.Version++
+	return nil
+}
+
+// LimitHistoryCopy returns a defensive copy of the immutable revision trail.
+func (g *Gate) LimitHistoryCopy() []LimitRevision {
+	return append([]LimitRevision(nil), g.LimitHistory...)
 }
 
 func (g *Gate) Reserve(commandID string, now time.Time) error {
